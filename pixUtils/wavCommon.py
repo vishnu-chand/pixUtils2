@@ -146,9 +146,12 @@ def dispSample(root, wavPath):
 
 class Text2machineSeq:
     # from g2p_en import G2p
-    from text import symbols
-    from string import punctuation
-    from text import text_to_sequence
+    try:
+        from text import symbols
+        from string import punctuation
+        from text import text_to_sequence
+    except:
+        print(f"fail to import text ")
     # g2p = G2p()
 
     def __init__(self, lexicon_path, text_cleaners, useG2p=True):
@@ -255,6 +258,10 @@ text: {text}
 
 def googleSTT(wavPath, gsDes, language_code, keyPath):
     from google.cloud import speech_v1 as speech
+    if not wavPath.endswith('.flac'):
+        wav = AudioSegment.from_file(wavPath)
+        wavPath = f"{pathname(wavPath)}_stt.flac"
+        wav.set_channels(1).export(wavPath, 'flac')
     exeIt(f'gsutil cp {wavPath} {gsDes}', debug=False)
     config = dict(language_code=language_code, enable_automatic_punctuation=True, enable_word_time_offsets=True, enable_separate_recognition_per_channel=True, use_enhanced=True, model='video', enable_word_confidence=True, enable_spoken_punctuation=True)
     client = speech.SpeechClient.from_service_account_file(getPath(keyPath))

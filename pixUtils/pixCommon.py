@@ -6,6 +6,7 @@ import logging
 import argparse
 import tempfile
 import traceback
+import collections
 import numpy as np
 from glob import glob
 from os.path import join
@@ -79,6 +80,13 @@ def imResize(img, sizeRC=None, scaleRC=None, interpolation=None):
             dr, dc = scaleRC, scaleRC
         r, c = img.shape[:2]
         r, c = r * dr, c * dc
+    assert not (r < 0 and c < 0)
+    if r < 0:
+        imR, imC = img.shape[:2]
+        r = imR * c / imC
+    if c < 0:
+        imR, imC = img.shape[:2]
+        c = imC * r / imR
     if interpolation == 'aa':
         img = np.array(Image.fromarray(img).resize((int(c), int(r)), Image.ANTIALIAS))
     else:
@@ -100,7 +108,7 @@ def osSysMove(src, des):
     os.system(f"""mv "{src}" "{des}" """)
 
 
-def moveCopy(src, des, op, isFile, rm):
+def moveCopy(src, des, op, isDir, rm):
     assert src != des, f'''
 src: {src}
 des: {des}
@@ -115,7 +123,7 @@ both are same path
                                 to     dirop('{src}', cpDir='{desDir}', rm=True)
                                 or     dirop('{src}', cpDir='{desDir}', rm=False, desName='newName')
                         ''')
-    if isFile:
+    if not isDir:
         if rm and exists(des):
             os.remove(des)
     else:
@@ -127,14 +135,15 @@ both are same path
             os.makedirs(mkpath)
         except FileExistsError:
             pass
-    return op(src, des)
+    op(src, des)
+    return des
 
 
-def dirop(path, *, mkdir=True, rm=False, isFile=None, cpDir=None, mvDir=None, symDir=None, desName='', skipExe=False):
+def dirop(path, *, mkdir=True, rm=False, isDir=None, cpDir=None, mvDir=None, symDir=None, desName='', skipExe=False):
     path = getPath(path)
     desName = basename(str(desName) or path)
-    if isFile is None:
-        isFile = os.path.isfile(path) if os.path.exists(path) else os.path.splitext(path)[-1]
+    if isDir is None:
+        isDir = not (os.path.isfile(path) if os.path.exists(path) else os.path.splitext(path)[-1])
     if skipExe:
         op, des = ['copying', f"{cpDir}/{desName}"] if cpDir else \
             ['moving', f"{mvDir}/{desName}"] if mvDir else \
@@ -142,7 +151,7 @@ def dirop(path, *, mkdir=True, rm=False, isFile=None, cpDir=None, mvDir=None, sy
                     [None, None]
         if op:
             print(f"""
-path  : [{'file' if isFile else 'folder'}]\t{path}
+path  : [{'folder' if isDir else 'file'}]\t{path}
 des   : {des}
 mkdir : {'create desDir if not exists' if mkdir else 'raise error if desDir not exists'}
 rm    : {'remove des if exists' if rm else 'raise error if des exists'}
@@ -150,7 +159,7 @@ rm    : {'remove des if exists' if rm else 'raise error if des exists'}
             """)
         else:
             print(f"""
-path  : [{'file' if isFile else 'folder'}]{path}
+path  : [{'folder' if isDir else 'file'}]{path}
 mkdir : {'create pathDir if not exists' if mkdir else 'raise error if pathDir not exists'}
 rm    : {'remove path if exists' if rm else 'raise error if path exists'}
             """)
@@ -160,25 +169,25 @@ rm    : {'remove path if exists' if rm else 'raise error if path exists'}
             raise Exception(f'''Fail src: {path}
                                             not found''')
     elif rm and exists(path):
-        if isFile:
-            os.remove(path)
-        else:
+        if isDir:
             shutil.rmtree(path, ignore_errors=True)
-    mkpath = dirname(path) if isFile else path
+        else:
+            os.remove(path)
+    mkpath = path if isDir else dirname(path)
     if mkdir and not exists(mkpath) and mkpath:
         try:
             os.makedirs(mkpath)
         except FileExistsError:
             pass
     if cpDir:
-        copy = shutil.copy if isFile else shutil.copytree
-        path = moveCopy(path, f"{cpDir}/{desName}", copy, isFile, rm=rm)
+        copy = shutil.copytree if isDir else shutil.copy
+        path = moveCopy(path, f"{cpDir}/{desName}", copy, isDir, rm=rm)
     elif mvDir:
         desName = desName or path
-        path = moveCopy(path, f"{mvDir}/{desName}", osSysMove, isFile, rm=rm)
+        path = moveCopy(path, f"{mvDir}/{desName}", osSysMove, isDir, rm=rm)
     elif symDir:
         desName = desName or path
-        path = moveCopy(path, f"{symDir}/{desName}", os.symlink, isFile, rm=rm)
+        path = moveCopy(path, f"{symDir}/{desName}", os.symlink, isDir, rm=rm)
     return path
 
 
@@ -200,20 +209,16 @@ def videoPlayer(vpath, startSec=0.0, stopSec=np.inf):
             fno += 1
 
 
-def rglob(p):
-    p = getPath(p)
-    return glob(p, recursive='**' in p)
-    # ps = p.split('**')
-    # roots, ps = ps[0], ps[1:]
-    # if not ps:
-    #     return glob(roots)
-    # else:
-    #     ps = '**' + '**'.join(ps)
-    #     res = []
-    #     for root in glob(roots):
-    #         for p in Path(root).glob(ps):
-    #             res.append(str(p))
-    #     return res
+def rglob(srcPath, raiseOnEmpty=False, sortBy='filename'):
+    p = getPath(srcPath)
+    p = glob(p, recursive='**' in p)
+    if raiseOnEmpty:
+        assert p, f"file not found: {srcPath}"
+    if sortBy == 'filename':
+        sortBy = lambda x: filename(x)
+    if sortBy:
+        p = sorted(p, key=sortBy)
+    return p
 
 
 def getTraceBack(searchPys, tracebackData=None):

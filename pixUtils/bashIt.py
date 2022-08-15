@@ -1,9 +1,11 @@
 import os
 import sys
 import json
+import time
 import traceback
 import subprocess as sp
 from os.path import basename
+from datetime import datetime as dt
 
 # bashEnv = os.getenv('bashEnv', 'export PATH=/home/ec2-user/miniconda3/bin:$PATH;eval "$(conda shell.bash hook)";conda activate gputf;')
 
@@ -51,7 +53,7 @@ def exeIt(cmd, returnOutput=True, waitTillComplete=True, sepBy=' ', inData=None,
     stdout, stderr = (None, None) if debug else (sp.DEVNULL, sp.DEVNULL)
     if returnOutput:
         stdout, stderr = sp.PIPE, sp.PIPE
-    cmd = f"{bashEnv}{decodeCmd(cmd, sepBy)}"
+    cmd = f"{bashEnv}{decodeCmd(cmd, sepBy)}".rstrip(';')
     __cmd = cmd.replace(';', ';\n\t')
     errCode, out, err = 0, 'no output', 'no output'
     if dispCmd and debug and not skipExe:
@@ -108,11 +110,20 @@ def exeIt(cmd, returnOutput=True, waitTillComplete=True, sepBy=' ', inData=None,
 
       _____________________________________________________________________________________
       """)
-    return cmd, errCode, out, err
+    return __cmd if dispCmd else 'cmd is hidden; dispCmd == False', errCode, out, err
 
 
 def curlIt(url, data=None, method='POST', other='', timeout=60, debug=False, waitTillComplete=False, skipExe=False):
-    data = '' if data is None else f"-d '{json.dumps(data)}'"
     timeout = f'--max-time {timeout}' if timeout else ''
-    curlCmd = f"curl -X {method.upper()} '{url}' {data} {timeout} {other}"
-    return exeIt(cmd=curlCmd, returnOutput=waitTillComplete, waitTillComplete=waitTillComplete, sepBy='', debug=debug, skipExe=skipExe)
+    curlCmd = f"curl -X {method.upper()} '{url}' {timeout} {other}"
+    jsonPath = None
+    if data is not None:
+        jsonPath = f'/tmp/{dt.now().strftime("%b%d_%H_%M_%S%f")}.json'
+        with open(jsonPath, 'w') as book:
+            json.dump(data, book)
+        curlCmd = f"curl -X {method.upper()} --data '@{jsonPath}' '{url}' {timeout} {other};"
+    res = exeIt(cmd=curlCmd, returnOutput=waitTillComplete, waitTillComplete=waitTillComplete, sepBy='', debug=debug, skipExe=skipExe)
+    time.sleep(.1)
+    if jsonPath is not None:
+        os.remove(jsonPath)
+    return res

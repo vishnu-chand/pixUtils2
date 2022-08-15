@@ -110,4 +110,3 @@ class DummyThreadBatch:
 
     def onException(self, jid, **kw):
         raise NotImplemented
-

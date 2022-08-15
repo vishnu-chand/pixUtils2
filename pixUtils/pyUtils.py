@@ -71,6 +71,58 @@ class tqdm:
             self.pbar.set_postfix(postFix)
 
 
+class ReadOnlyDict(dict):
+
+    def __init__(self, data, disableWrite=True, disableNewKey=True):
+        self.disableWrite = disableWrite
+        self.disableNewKey = disableNewKey
+        super().__init__(data)
+
+    def __setitem__(self, key, val):
+        if self.disableWrite:
+            raise RuntimeError(f"disable write, cannot modify key: {key}")
+        elif self.disableNewKey:
+            if key not in self:
+                raise RuntimeError(f"disable add new key, cannot modify key: {key}")
+        return dict.__setitem__(self, key, val)
+
+    def __delitem__(self, key):
+        if self.disableWrite:
+            raise RuntimeError(f"disable write, cannot delete key: {key}")
+        return dict.__delitem__(self, key)
+
+    def pop(self, key, default=None):
+        if self.disableWrite:
+            raise RuntimeError(f"disable write, cannot pop key: {key}")
+        return dict.pop(self, key, default)
+
+    def popitem(self):
+        if self.disableWrite:
+            raise RuntimeError(f"disable write, cannot pop")
+        return dict.popitem(self)
+
+    def clear(self, *args, **kwargs):
+        if self.disableWrite:
+            raise RuntimeError(f"disable write, cannot clear")
+        raise dict.clear(self)
+
+    def update(self, *args, **kwargs):
+        if self.disableWrite:
+            raise RuntimeError(f"disable write, cannot update")
+        elif self.disableNewKey:
+            for keys in [args, kwargs]:
+                for key in args:
+                    if key not in self:
+                        raise RuntimeError(f"disable add new key, cannot modify key: {key}")
+        dict.update(self, *args, **kwargs)
+        return self
+
+    def setdefault(self, *args, **kwargs):
+        if self.disableWrite:
+            raise RuntimeError(f"disable write, cannot set default")
+        return dict.setdefault(self, *args, **kwargs)
+
+
 class DotDict(dict):
     def __init__(self, datas=None):
         super().__init__()
@@ -144,6 +196,10 @@ class DotDict(dict):
                 res[k] = str(v)
         return res
 
+    def update(self, *args, **kwargs):
+        dict.update(self, *args, **kwargs)
+        return self
+
 
 def readYaml(src, defaultDict=FileNotFoundError, returnDotDict=True):
     src = getPath(src)
@@ -159,6 +215,7 @@ def readYaml(src, defaultDict=FileNotFoundError, returnDotDict=True):
 def writeYaml(yamlPath, jObjs):
     with open(dirop(yamlPath), 'w') as book:
         yaml.dump(jObjs, book, default_flow_style=False, sort_keys=False)
+    return yamlPath
 
 
 def readBook(bookPath, returnList=True, mode='r', encoding=None, errors=None):
@@ -200,12 +257,16 @@ def writePkl(pklPath, objs):
     pickle.dump(objs, open(dirop(pklPath), 'wb'))
 
 
-def p2l(x, idx=None, noExt=False):
+def p2l(x, idx=None, startIdx=0, endIdx=None, noExt=False, joinBy=None):
     if noExt:
         x = os.path.splitext(x)[0]
     p = [p for p in x.split(os.sep)]
     if idx is not None:
         p = [p[i] for i in idx]
+    else:
+        p = p[startIdx:endIdx]
+    if joinBy:
+        p = joinBy.join(p)
     return p
 
 
@@ -238,15 +299,13 @@ def float2img(img, min=None, max=None):
     return (255 * img).astype('u1')
 
 
-def bboxLabel(img, txt="", loc=(30, 45), color=(255, 255, 255), thickness=3, txtSize=1, txtFont=None, txtThickness=1, txtColor=None, asTitle=None):
+def bboxLabel(img, txt="", loc=(30, 45), color=(255, 255, 255), thickness=3, txtSize=1, txtFont=None, txtThickness=1, txtColor=None, asTitle=False):
     txtFont = cv2.QT_FONT_NORMAL if txtFont is None else txtFont
     if len(loc) == 4:
         x0, y0, w, h = loc
         x0, y0, rw, rh = int(x0), int(y0), int(w), int(h)
         cv2.rectangle(img, (x0, y0), (x0 + rw, y0 + rh), list(color), thickness)
     else:
-        if asTitle is None:
-            asTitle = True
         x0, y0, rw, rh = int(loc[0]), int(loc[1]), 0, 0
     txt = str(txt)
     if txt != "":
@@ -301,6 +360,8 @@ def putSubImg(mainImg, subImg, loc, interpolation=None):
     else:
         x, y, w, h = int(loc[0]), int(loc[1]), int(loc[2]), int(loc[3])
         subImg = cv2.resize(subImg, (w, h), interpolation=interpolation)
+    x = x if x >= 0 else mainImg.shape[1] - subImg.shape[1]
+    y = y if y >= 0 else mainImg.shape[0] - subImg.shape[0]
     x, y, w, h = frameFit(mainImg, (x, y, w, h))
     mainImg[y:y + h, x:x + w] = getSubImg(subImg, (0, 0, w, h))
     return mainImg
@@ -570,7 +631,7 @@ class clk:
             datas = pd.DataFrame(datas, columns=cols)
             datas = datas.set_index('name')
             lapse = self.__getLap(toks[0][-1], toks[-1][-1])
-            datas.index.name = f"{lapse :0.3f}[{1/lapse :0.3f}]"
+            datas.index.name = f"{lapse :0.3f}[{1 / lapse :0.3f}]"
         elif returnType == 'list':
             datas = cols, datas
         return datas
@@ -689,20 +750,6 @@ def getGdownCmd(downloadCmd, url):
             gid = gid.split('&')[0]
         downloadCmd += f'gdown https://drive.google.com/uc?id={gid};'
     return downloadCmd
-
-
-def rawsGlob(s3path, raiseOnEmpty=True):
-    assert '*' in s3path, f"* missing {s3path}"
-    root, path = [], []
-    for x in s3path.split(os.sep):
-        if not path and '*' not in x:
-            root.append(x)
-        else:
-            path.append(x)
-    cmd, errCode, out, err = exeIt(f'aws s3 sync {os.sep.join(root)} . --exclude "*" --include "{os.sep.join(path)}" --dryrun', debug=False)
-    if raiseOnEmpty:
-        assert out, f"file not found: {s3path}"
-    return [x.split('download: ')[1].split(' to ')[0] for x in out.split('\n')] if out else []
 
 
 class AccessS3:
@@ -838,6 +885,48 @@ def replaces(path, *words):
     return path
 
 
+def selectRoi2(oimg, roi=10, color=(0, 255, 0), verbose=True):
+    def mouse_click(event, x, y, flags, param):
+        disp = False
+        if event == cv2.EVENT_LBUTTONDOWN:
+            add = True
+            if pts:
+                err = np.linalg.norm(np.array(pts) - np.array([x, y]), axis=-1)
+                iBest = err.argmin()
+                add = err[iBest] > roi
+            if add:
+                disp = True
+                pts.append([x, y])
+
+        elif event == cv2.EVENT_RBUTTONDOWN:
+            if pts:
+                err = np.linalg.norm(np.array(pts) - np.array([x, y]), axis=-1)
+                iBest = err.argmin()
+                if err[iBest] < roi:
+                    pts.pop(iBest)
+                    disp = True
+
+        if disp:
+            img = oimg.copy()
+            if pts:
+                cv2.drawContours(img, np.array([pts]), -1, color, 3)
+                for x, y in pts:
+                    cv2.circle(img, (int(x), int(y)), roi, color, -1)
+            cv2.imshow(winName, img)
+
+    pts = list()
+    img = oimg.copy()
+    winName = 'selectRoi2: left click to add right click to delete'
+    cv2.namedWindow(winName, 0)
+    cv2.imshow(winName, img)
+    cv2.setMouseCallback(winName, mouse_click)
+    cv2.waitKey(0)
+    cv2.destroyAllWindows()
+    if verbose:
+        print(f"pts: {pts}")
+    return pts
+
+
 def compareVersions(versions, compareBy, ovideoPlayer=None, putTitle=bboxLabel, bbox=None, showDiff=False):
     vPlayer = videoPlayer if ovideoPlayer is None else ovideoPlayer
     vpaths = [compareBy] + [version for version in versions if version != compareBy]
@@ -861,11 +950,11 @@ def compareVersions(versions, compareBy, ovideoPlayer=None, putTitle=bboxLabel, 
             score = 0
             res.append(putTitle(imgs[0].copy(), basename(vpaths[0])))
             res.append(putTitle(imgs[ix].copy(), basename(vpaths[ix])))
-            imgs[0] = putSubImg(imgs[0], np.zeros_like(imgs[0]), (0, 100, 200, 200))
-            imgs[0] = putSubImg(imgs[0], np.zeros_like(imgs[0]), (0, 0, 1200, 100))
+            # imgs[0] = putSubImg(imgs[0], np.zeros_like(imgs[0]), (0, 100, 200, 200))
+            # imgs[0] = putSubImg(imgs[0], np.zeros_like(imgs[0]), (0, 0, 1200, 100))
             if showDiff:
-                img = putSubImg(img, np.zeros_like(img), (0, 100, 200, 200))
-                img = putSubImg(img, np.zeros_like(img), (0, 0, 1200, 100))
+                # img = putSubImg(img, np.zeros_like(img), (0, 100, 200, 200))
+                # img = putSubImg(img, np.zeros_like(img), (0, 0, 1200, 100))
                 diff = cv2.absdiff(imgs[0], img)
                 res.append(diff)
                 diff = cv2.inRange(diff.min(axis=-1), 10, 300)
@@ -982,6 +1071,7 @@ def __decodePath(remoteSrc):
 
 def ec2pull(remoteSrc, desDir, useZip, userName='ubuntu', ip=None, keyPath=getPath('~/.ssh/vishnu.pem')):
     res, desDir = __decodePath(remoteSrc), __decodePath(desDir)
+    res, desDir = f"~/{res.split(':~/')[-1]}" if ':~/' in res else res, f"~/{desDir.split(':~/')[-1]}" if ':~/' in desDir else desDir
     remoteSrc = res
     ip = ip or getIp(' ')
     remoteSrc, desDir = remoteSrc.strip(), desDir.strip()
@@ -1025,6 +1115,7 @@ def ec2pull(remoteSrc, desDir, useZip, userName='ubuntu', ip=None, keyPath=getPa
 def ec2push(localSrc, desDir, useZip, userName='ubuntu', ip=None, keyPath='~/.ssh/vishnu.pem'):
     ip = ip or getIp(' ')
     localSrc, desDir = localSrc.strip(), desDir.strip()
+    localSrc, desDir = f"~/{localSrc.split(':~/')[-1]}" if ':~/' in localSrc else localSrc, f"~/{desDir.split(':~/')[-1]}" if ':~/' in desDir else desDir
     zipName = f"tempZip_{getTimeStamp()}.tar.gz"
     remoteId = f"{userName}@{ip}"
     cmd = f'''
@@ -1110,4 +1201,15 @@ def getCondaPkgs(pkgName=None, cacheDir='~/miniconda3', rm=''):
 
 
 def shaIt(s):
-    return f'{int(hashlib.sha1(s.encode("utf-8")).hexdigest(), 16) % 100000000000000000000000000000000:032}'
+    return f'{int(hashlib.sha1(str(s).encode("utf-8")).hexdigest(), 16) % 100000000000000000000000000000000:032}'
+
+
+def shaIt2(opDir, pre, kw):
+    x = [str(m) for _, m in sorted(kw.items(), key=lambda __x: str(__x[0]))]
+    x = '_'.join(x).replace(opDir, '')
+    # print(f"146 shaIt2 commonUtils : {pre, sorted(kw.items(), key=lambda __x: str(__x[0]))}")
+    # x = f"{x}_{getTimeStamp()}"
+    x = shaIt(x)
+    # x = x.replace('/', '-')
+    x = f"{pre}_{x}"
+    return x
